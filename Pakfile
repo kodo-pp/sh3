@@ -1,0 +1,8 @@
+pak_name='sh3'
+pak_depends=()
+pak_license_file='LICENSE'
+
+pak_package() {
+    mkdir -p "$PAK_PKGDIR/usr/bin"
+    install -m755 sh3 "$PAK_PKGDIR/usr/bin"
+}
