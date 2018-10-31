@@ -28,7 +28,7 @@ D_LINKER="c++"
 D_LINKPFLAGS="-o "
 D_LINKFLAGS=""
 
-declare -r VERSION="1.2"
+declare -r VERSION="1.2.1"
 if [[ -z "${SH3_NEST}" ]]; then
     export SH3_NEST=0
 fi
@@ -37,7 +37,7 @@ o_action=""
 o_install_path=""
 
 function identity() {
-    cp --reflink "$2" "$1"
+    cp --reflink=auto "$2" "$1" 2>/dev/null || cp "$2" "$1"
 }
 
 function no_deps() {
