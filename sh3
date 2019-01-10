@@ -5,6 +5,7 @@ set -e
 declare -Ag D_EXT_TAB
 declare -Ag D_FLAGS
 declare -Ag D_PFLAGS
+declare -Ag D_GETDEPS
 
 D_EXT_TAB["c"]="cc"
 D_EXT_TAB["cpp"]="c++"
@@ -206,6 +207,7 @@ function action_build() {
             to_updts+=("${src}")
         else
             local depends=($(${D_GETDEPS[${ext}]} "${src}"))
+            local dep
             for dep in "${depends[@]}"; do
                 if has_changed "${dep}"; then
                     to_rebuild+=("${src}")
@@ -215,6 +217,7 @@ function action_build() {
             if has_changed "${src}"; then
                 to_rebuild+=("${src}")
                 to_updts+=("${src}")
+            fi
         fi
     done
 
@@ -253,7 +256,7 @@ function action_build() {
 
     for src in "${to_updts[@]}"; do
         (( ++iter ))
-        log_progress "Updating timestamp for ${src}" "${iter}" "${#to_rehash[@]}"
+        log_progress "Updating timestamp for ${src}" "${iter}" "${#to_updts[@]}"
         update_timestamp "${src}"
     done
 }
