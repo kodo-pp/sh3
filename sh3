@@ -29,7 +29,7 @@ D_LINKER="c++"
 D_LINKPFLAGS="-o "
 D_LINKFLAGS=""
 
-declare -r VERSION="1.2.1"
+declare -r VERSION="1.3.0"
 if [[ -z "${SH3_NEST}" ]]; then
     export SH3_NEST=0
 fi
