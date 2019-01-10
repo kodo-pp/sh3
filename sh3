@@ -45,6 +45,7 @@ function no_deps() {
 }
 
 function log() {
+    local i
     for (( i = 0; i < ${SH3_NEST}; ++i )); do
         echo -n "    "
     done
@@ -52,6 +53,7 @@ function log() {
 }
 
 function log_toplevel() {
+    local i
     for (( i = 0; i < ${SH3_NEST}; ++i )); do
         echo -n "    "
     done
@@ -94,7 +96,7 @@ function parse_args() {
             log "Recursively building in ${dir}"
             cd "${dir}"
             env -i SH3_NEST="$(( ${SH3_NEST} + 1 ))" PATH="${PATH}" "$(which sh3)" "$@"
-            ret="$?"
+            local ret="$?"
             exit "${ret}"
             ;;
         *)
@@ -132,27 +134,34 @@ function perform_action() {
 function cc_get_dependencies() {
     local source_file="$1"
     local ext=${source_file/*./}
-    cpp -MM "${source_file}" ${D_FLAGS["${ext}"]} $(for i in ${D_INCDIRS}; do echo " -Iinclude"; done) | sed 's/^[^:]*://g'
+    local i
+    cpp -MM "${source_file}" ${D_FLAGS["${ext}"]} $(for i in ${D_INCDIRS}; do echo " -I${i}"; done) | sed -e 's/\\//g' -e 's/^[^:]*://g'
 }
 
 function has_changed() {
-    mkdir -p .build-cache/sums
+    mkdir -p .sh3/timestamps
     local file="$1"
-    local cachedname=".build-cache/sums/$(echo "./${file}" | base64)"
-    if ! [[ -f "${cachedname}" ]]; then
+    local tsfile=".sh3/timestamps/$(echo "./${file}" | sed -e 's![.][.]![up]!g' -e 's!/![dir]!g')"
+    if ! [[ -f "${tsfile}" ]]; then
+        # Not built
         return 0
-    elif sha256sum "${file}" | awk '{print $1}' | cmp - "${cachedname}" >/dev/null 2>&1; then
-        return 1
     else
+        local real_timestamp="$(stat -c '%Y' "./${file}")"
+        local recorded_timestamp="$(cat "${tsfile}")"
+        if [[ "${real_timestamp}" -eq "${recorded_timestamp}" ]]; then
+            # Not changed
+            return 1
+        fi
+        # Changed
         return 0
     fi
 }
 
-function rehash() {
-    mkdir -p .build-cache/sums
+function update_timestamp() {
+    mkdir -p .sh3/timestamps
     local file="$1"
-    local cachedname=".build-cache/sums/$(echo "./${file}" | base64)"
-    sha256sum "${file}" | awk '{print $1}' > "${cachedname}"
+    local tsfile=".sh3/timestamps/$(echo "./${file}" | sed -e 's![.][.]![up]!g' -e 's!/![dir]!g')"
+    stat -c '%Y' "${file}" > "${tsfile}"
 }
 
 function action_build() {
@@ -177,31 +186,35 @@ function action_build() {
     local sources=($(list_sources))
     local obj_files=""
 
-    incflags=""
-    for incdir in ${D_INCDIRS[@]}; do
+    local incflags=""
+    for incdir in ${D_INCDIRS}; do
         incflags+=" -I${incdir}"
     done
 
     local m="${#sources[@]}"
     local to_rebuild=()
-    local to_rehash=()
+    local to_updts=()
     local iter=1
     log_toplevel "Looking for changes"
+    local src
     for src in ${sources[@]}; do
         log_progress "Parsing ${src}" "${iter}" "$m"
         (( ++iter ))
         local ext="${src/*./}"
         if [[ -z "${D_GETDEPS[${ext}]}" ]]; then
             to_rebuild+=("${src}")
-            to_rehash+=("${src}")
+            to_updts+=("${src}")
         else
             local depends=($(${D_GETDEPS[${ext}]} "${src}"))
             for dep in "${depends[@]}"; do
                 if has_changed "${dep}"; then
                     to_rebuild+=("${src}")
-                    to_rehash+=("${dep}")
+                    to_updts+=("${dep}")
                 fi
             done
+            if has_changed "${src}"; then
+                to_rebuild+=("${src}")
+                to_updts+=("${src}")
         fi
     done
 
@@ -211,6 +224,7 @@ function action_build() {
     local iter=1
 
     log_toplevel "Building"
+    local src
     for src in "${to_rebuild[@]}"; do
         log_progress "Building ${src}" "${iter}" "$n"
         build_file "${src}"
@@ -218,6 +232,7 @@ function action_build() {
     done
 
     log_toplevel "Locating object files"
+    local src
     for src in "${sources[@]}"; do
         obj_files+=" ${src}.o"
     done
@@ -229,17 +244,17 @@ function action_build() {
         F_postbuild
     fi
 
-    log_toplevel "Updating cache"
-    iter=0
-    to_rehash+=(${to_rebuild[@]})
+    log_toplevel "Updating timestamps"
+    local iter=0
+    to_updts+=(${to_rebuild[@]})
 
     # Thanks to https://stackoverflow.com/a/13648438
-    to_rehash=($(echo "${to_rehash[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+    to_updts=($(echo "${to_updts[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
 
-    for src in "${to_rehash[@]}"; do
+    for src in "${to_updts[@]}"; do
         (( ++iter ))
-        log_progress "Rehashing ${src}" "${iter}" "${#to_rehash[@]}"
-        rehash "${src}"
+        log_progress "Updating timestamp for ${src}" "${iter}" "${#to_rehash[@]}"
+        update_timestamp "${src}"
     done
 }
 
@@ -262,7 +277,10 @@ function load_modules() {
 }
 
 function list_sources() {
-    find ${D_SOURCES} -regex ".*[.].*" | while read src; do
+    local src
+    for src in "${D_SOURCES[@]}"; do
+        find "${src}" -regex ".*[.].*"
+    done | while read src; do
         local ext="${src/*./}"
         if [[ -n "${D_EXT_TAB[${ext}]}" ]]; then
             echo "${src}"
@@ -293,17 +311,19 @@ function action_clean() {
         F_preclean
     fi
 
-    log_toplevel "Cleaning cache"
-    rm -rf ".build-cache"
+    log_toplevel "Removing timestamp files"
+    rm -rf ".sh3"
 
     log_toplevel "Locating object files"
     local sources=($(list_sources))
     local obj_files=""
+    local src
     for src in ${sources[@]}; do
         obj_files+=" ${src}.o"
     done
 
     log_toplevel "Removing object files"
+    local obj
     for obj in ${obj_files[@]}; do
         rm -f "${obj}"
     done
@@ -326,6 +346,7 @@ function action_install_headers() {
     local filelist=(${D_INCFILES})
     local count="$(( ${#dirlist[@]} + ${#filelist[@]} ))"
     local iter=1
+    local inc
     for inc in ${D_INCFILES}; do
         log_progress "Installing ${inc}" "${iter}" "${count}"
         cp "${inc}" "${o_install_path}/"
